@@ -1,4 +1,4 @@
-name: Deploy HotelOS to GitHub Pages
+name: Deploy HotelOS from ZIP
 
 on:
   push:
@@ -17,23 +17,76 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build:
+  build-and-deploy:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
+
+      # 1. تحميل ملفات GitHub
+      - name: Checkout repository
         uses: actions/checkout@v4
 
+      # 2. البحث عن ZIP وفك ضغطه
+      - name: Extract HotelOS ZIP
+        shell: bash
+        run: |
+          set -e
+
+          echo "Searching for HotelOS ZIP..."
+
+          ZIP_FILE=$(find . -maxdepth 2 -type f -name "*.zip" | head -n 1)
+
+          if [ -z "$ZIP_FILE" ]; then
+            echo "ERROR: No ZIP file found."
+            exit 1
+          fi
+
+          echo "Found ZIP: $ZIP_FILE"
+
+          rm -rf hotelos-source
+          mkdir -p hotelos-source
+
+          unzip -q "$ZIP_FILE" -d hotelos-source
+
+          echo "ZIP extracted successfully."
+
+          echo "Extracted files:"
+          find hotelos-source -maxdepth 2 -type f | head -50
+
+      # 3. تحديد مجلد المشروع
+      - name: Detect HotelOS project
+        shell: bash
+        run: |
+          set -e
+
+          if [ -f "hotelos-source/hotel-os/package.json" ]; then
+            echo "HotelOS detected in hotelos-source/hotel-os"
+            echo "HOTEL_DIR=hotelos-source/hotel-os" >> "$GITHUB_ENV"
+
+          elif [ -f "hotelos-source/package.json" ]; then
+            echo "HotelOS detected in hotelos-source"
+            echo "HOTEL_DIR=hotelos-source" >> "$GITHUB_ENV"
+
+          else
+            echo "ERROR: package.json not found."
+            find hotelos-source -maxdepth 4 -type f
+            exit 1
+          fi
+
+      # 4. إعداد Node.js
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: npm
 
+      # 5. تثبيت Dependencies
       - name: Install dependencies
+        working-directory: ${{ env.HOTEL_DIR }}
         run: npm ci
 
+      # 6. بناء HotelOS
       - name: Build HotelOS
+        working-directory: ${{ env.HOTEL_DIR }}
         env:
           VITE_DATA_SOURCE: supabase
           VITE_SUPABASE_URL: https://mfccirkculdetvjpfdiq.supabase.co
@@ -41,14 +94,41 @@ jobs:
           VITE_BASE_PATH: /hotel-os/
         run: npm run build
 
+      # 7. التأكد من نجاح البناء
+      - name: Verify build
+        shell: bash
+        run: |
+          set -e
+
+          if [ ! -f "${HOTEL_DIR}/dist/index.html" ]; then
+            echo "ERROR: HotelOS build failed."
+            exit 1
+          fi
+
+          echo "HotelOS build verified successfully."
+
+          ls -lah "${HOTEL_DIR}/dist"
+
+      # 8. إعداد GitHub Pages
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5
 
+      # 9. رفع dist إلى GitHub Pages
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: ./dist
+          path: ${{ env.HOTEL_DIR }}/dist
 
+      # 10. النشر
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
+
+      # 11. النتيجة
+      - name: Deployment successful
+        run: |
+          echo "=========================================="
+          echo "HotelOS deployed successfully!"
+          echo "=========================================="
+          echo "URL:"
+          echo "https://echchiaa95.github.io/hotel-os/"
