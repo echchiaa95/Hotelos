@@ -20,38 +20,68 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # ---------------------------------------------------------
+      # Extract all ZIP files recursively
+      # ---------------------------------------------------------
       - name: Extract HotelOS ZIP
         shell: bash
         run: |
           set -e
 
-          echo "Repository files:"
-          find . -maxdepth 3 -type f | sort
-
-          ZIP_FILE=$(find . -type f -iname "*.zip" \
-            ! -path "./.git/*" \
-            | head -n 1)
-
-          if [ -z "$ZIP_FILE" ]; then
-            echo "ERROR: HotelOS ZIP not found."
-            exit 1
-          fi
-
-          echo "Using ZIP: $ZIP_FILE"
+          echo "=== Repository ==="
+          find . -maxdepth 4 -type f | sort
 
           mkdir -p hotelos-source
-          unzip -o "$ZIP_FILE" -d hotelos-source
 
-          echo "Extracted files:"
-          find hotelos-source -maxdepth 5 -type f | sort
+          ZIP_COUNT=0
 
+          while true; do
+            ZIP_FILE=$(find . \
+              -type f \
+              -iname "*.zip" \
+              ! -path "./.git/*" \
+              ! -path "./hotelos-source/.git/*" \
+              | head -n 1)
+
+            if [ -z "$ZIP_FILE" ]; then
+              break
+            fi
+
+            echo "Extracting: $ZIP_FILE"
+
+            unzip -o "$ZIP_FILE" -d hotelos-source
+
+            rm -f "$ZIP_FILE"
+
+            ZIP_COUNT=$((ZIP_COUNT + 1))
+
+            if [ "$ZIP_COUNT" -gt 10 ]; then
+              echo "ERROR: Too many nested ZIP files."
+              exit 1
+            fi
+          done
+
+          echo ""
+          echo "=== Extraction complete ==="
+          echo "ZIP files extracted: $ZIP_COUNT"
+
+          echo ""
+          echo "=== Extracted files ==="
+          find hotelos-source -maxdepth 8 -type f | sort
+
+      # ---------------------------------------------------------
+      # Find package.json anywhere inside extracted project
+      # ---------------------------------------------------------
       - name: Detect HotelOS project
         shell: bash
         run: |
           set -e
+
+          echo "Searching for package.json..."
 
           PACKAGE_JSON=$(find hotelos-source \
             -type f \
@@ -60,21 +90,32 @@ jobs:
             | head -n 1)
 
           if [ -z "$PACKAGE_JSON" ]; then
+            echo ""
             echo "ERROR: package.json not found."
-            find hotelos-source -maxdepth 6 -type f | sort
+            echo ""
+            echo "Directory tree:"
+            find hotelos-source -maxdepth 10 -print | sort
             exit 1
           fi
 
           PROJECT_DIR=$(dirname "$PACKAGE_JSON")
 
-          echo "Detected package.json:"
+          echo ""
+          echo "======================================"
+          echo "HotelOS detected"
+          echo "======================================"
+          echo "package.json:"
           echo "$PACKAGE_JSON"
-
-          echo "Detected project directory:"
+          echo ""
+          echo "Project directory:"
           echo "$PROJECT_DIR"
+          echo "======================================"
 
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
+      # ---------------------------------------------------------
+      # Remove environment files
+      # ---------------------------------------------------------
       - name: Remove environment files
         shell: bash
         run: |
@@ -82,9 +123,17 @@ jobs:
 
           find "$PROJECT_DIR" \
             -type f \
-            \( -name ".env" -o -name ".env.local" -o -name ".env.production" \) \
+            \( \
+              -name ".env" \
+              -o -name ".env.local" \
+              -o -name ".env.production" \
+              -o -name ".env.development" \
+            \) \
             -delete || true
 
+      # ---------------------------------------------------------
+      # Setup Node
+      # ---------------------------------------------------------
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
@@ -92,11 +141,17 @@ jobs:
           cache: npm
           cache-dependency-path: ${{ env.PROJECT_DIR }}/package-lock.json
 
+      # ---------------------------------------------------------
+      # Install dependencies
+      # ---------------------------------------------------------
       - name: Install dependencies
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
           npm ci
 
+      # ---------------------------------------------------------
+      # Build HotelOS
+      # ---------------------------------------------------------
       - name: Build HotelOS
         working-directory: ${{ env.PROJECT_DIR }}
         env:
@@ -107,34 +162,60 @@ jobs:
         run: |
           npm run build
 
+      # ---------------------------------------------------------
+      # Verify build
+      # ---------------------------------------------------------
       - name: Verify build
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
           set -e
 
+          echo "Checking build output..."
+
           if [ ! -f "dist/index.html" ]; then
-            echo "ERROR: dist/index.html not found."
-            echo "Build directory contents:"
-            find dist -maxdepth 3 -type f | sort || true
+            echo "ERROR: dist/index.html was not created."
+            echo ""
+            echo "dist contents:"
+            find dist -maxdepth 5 -type f | sort || true
             exit 1
           fi
 
-          echo "Build successful."
-          echo "dist/index.html exists."
+          echo ""
+          echo "======================================"
+          echo "HotelOS build successful"
+          echo "======================================"
+          echo "dist/index.html exists"
+          echo "======================================"
 
+      # ---------------------------------------------------------
+      # Configure GitHub Pages
+      # ---------------------------------------------------------
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5
 
+      # ---------------------------------------------------------
+      # Upload Pages artifact
+      # ---------------------------------------------------------
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
           path: ${{ env.PROJECT_DIR }}/dist
 
+      # ---------------------------------------------------------
+      # Deploy
+      # ---------------------------------------------------------
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
 
+      # ---------------------------------------------------------
+      # Success
+      # ---------------------------------------------------------
       - name: Deployment successful
         run: |
-          echo "HotelOS deployed successfully."
-          echo "URL: https://echchiaa95.github.io/Hotelos/"
+          echo ""
+          echo "======================================"
+          echo "HotelOS deployed successfully!"
+          echo "======================================"
+          echo "https://echchiaa95.github.io/Hotelos/"
+          echo "======================================"
