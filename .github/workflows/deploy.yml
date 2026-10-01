@@ -1,10 +1,9 @@
-name: Deploy HotelOS from ZIP
+name: Deploy HotelOS to GitHub Pages
 
 on:
   push:
     branches:
       - main
-
   workflow_dispatch:
 
 permissions:
@@ -21,7 +20,6 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-
       - name: Checkout repository
         uses: actions/checkout@v4
 
@@ -30,70 +28,99 @@ jobs:
         run: |
           set -e
 
-          echo "Searching for HotelOS ZIP..."
+          echo "Repository files:"
+          find . -maxdepth 3 -type f | sort
 
-          ZIP_FILE=$(find . -maxdepth 2 -type f -name "*.zip" | head -n 1)
+          ZIP_FILE=$(find . -type f -iname "*.zip" \
+            ! -path "./.git/*" \
+            | head -n 1)
 
           if [ -z "$ZIP_FILE" ]; then
-            echo "ERROR: No ZIP file found."
+            echo "ERROR: HotelOS ZIP not found."
             exit 1
           fi
 
-          echo "Found ZIP: $ZIP_FILE"
+          echo "Using ZIP: $ZIP_FILE"
 
-          rm -rf hotelos-source
           mkdir -p hotelos-source
+          unzip -o "$ZIP_FILE" -d hotelos-source
 
-          unzip -q "$ZIP_FILE" -d hotelos-source
-
-          echo "ZIP extracted successfully."
+          echo "Extracted files:"
+          find hotelos-source -maxdepth 5 -type f | sort
 
       - name: Detect HotelOS project
         shell: bash
         run: |
           set -e
 
-          if [ -f "hotelos-source/hotel-os/package.json" ]; then
-            echo "HOTEL_DIR=hotelos-source/hotel-os" >> "$GITHUB_ENV"
+          PACKAGE_JSON=$(find hotelos-source \
+            -type f \
+            -name "package.json" \
+            ! -path "*/node_modules/*" \
+            | head -n 1)
 
-          elif [ -f "hotelos-source/package.json" ]; then
-            echo "HOTEL_DIR=hotelos-source" >> "$GITHUB_ENV"
-
-          else
+          if [ -z "$PACKAGE_JSON" ]; then
             echo "ERROR: package.json not found."
-            find hotelos-source -maxdepth 4 -type f
+            find hotelos-source -maxdepth 6 -type f | sort
             exit 1
           fi
+
+          PROJECT_DIR=$(dirname "$PACKAGE_JSON")
+
+          echo "Detected package.json:"
+          echo "$PACKAGE_JSON"
+
+          echo "Detected project directory:"
+          echo "$PROJECT_DIR"
+
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+
+      - name: Remove environment files
+        shell: bash
+        run: |
+          set -e
+
+          find "$PROJECT_DIR" \
+            -type f \
+            \( -name ".env" -o -name ".env.local" -o -name ".env.production" \) \
+            -delete || true
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 20
+          cache: npm
+          cache-dependency-path: ${{ env.PROJECT_DIR }}/package-lock.json
 
       - name: Install dependencies
-        working-directory: ${{ env.HOTEL_DIR }}
-        run: npm ci
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          npm ci
 
       - name: Build HotelOS
-        working-directory: ${{ env.HOTEL_DIR }}
+        working-directory: ${{ env.PROJECT_DIR }}
         env:
           VITE_DATA_SOURCE: supabase
           VITE_SUPABASE_URL: https://mfccirkculdetvjpfdiq.supabase.co
-          VITE_SUPABASE_ANON_KEY: sb_publishable_8m86pqA9VgN4DhVU4mXI9Q_2SinBZWj
+          VITE_SUPABASE_PUBLISHABLE_KEY: sb_publishable_8m86pqA9vG4DhVU4mXI9Q_2SinBZWj
           VITE_BASE_PATH: /Hotelos/
-        run: npm run build
+        run: |
+          npm run build
 
       - name: Verify build
-        shell: bash
+        working-directory: ${{ env.PROJECT_DIR }}
         run: |
           set -e
 
-          if [ ! -f "${HOTEL_DIR}/dist/index.html" ]; then
+          if [ ! -f "dist/index.html" ]; then
             echo "ERROR: dist/index.html not found."
+            echo "Build directory contents:"
+            find dist -maxdepth 3 -type f | sort || true
             exit 1
           fi
 
-          echo "Build verified successfully."
+          echo "Build successful."
+          echo "dist/index.html exists."
 
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5
@@ -101,7 +128,7 @@ jobs:
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: ${{ env.HOTEL_DIR }}/dist
+          path: ${{ env.PROJECT_DIR }}/dist
 
       - name: Deploy to GitHub Pages
         id: deployment
@@ -109,5 +136,5 @@ jobs:
 
       - name: Deployment successful
         run: |
-          echo "HotelOS deployed successfully!"
-          echo "https://echchiaa95.github.io/Hotelos/"
+          echo "HotelOS deployed successfully."
+          echo "URL: https://echchiaa95.github.io/Hotelos/"
